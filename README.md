@@ -30,9 +30,22 @@ It keeps state in a workspace, so repeated runs only process what changed (updat
 
 ## Install
 
+`pi-share-hf` isn't published to npm — install from source and symlink it into your global `node_modules`:
+
 ```bash
-npm install -g https://github.com/coreyryanhanson/pi-share-hf
-npm install -g @mariozechner/pi-coding-agent
+git clone https://github.com/coreyryanhanson/pi-share-hf
+cd pi-share-hf
+npm install
+npm run build
+npm link
+```
+
+`npm link` symlinks the package globally and exposes the `pi-share-hf` command. To update, `git pull && npm run build` in the clone.
+
+To uninstall, remove the global link (removes the symlink and the `pi-share-hf` command):
+
+```bash
+npm rm -g pi-share-hf
 ```
 
 No separate secret scanner is needed — secretlint runs in-process as part of `pi-share-hf`.
