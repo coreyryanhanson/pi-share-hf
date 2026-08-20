@@ -1,4 +1,10 @@
-export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 export type JsonObject = { [key: string]: JsonValue };
 
 export type Severity = "low" | "medium" | "high" | "critical";
@@ -45,19 +51,19 @@ export interface ReviewOptions {
   session?: string;
 }
 
-export type TruffleHogFindingStatus = "verified" | "unverified" | "unknown";
+export type SecretScanFindingStatus = "verified" | "unverified" | "unknown";
 
-export interface TruffleHogFinding {
+export interface SecretScanFinding {
   detector: string;
   decoder?: string;
-  status: TruffleHogFindingStatus;
+  status: SecretScanFindingStatus;
   line?: number;
   raw_sha256?: string;
   masked: string;
   verification_from_cache: boolean;
 }
 
-export interface TruffleHogSummary {
+export interface SecretScanSummary {
   findings: number;
   verified: number;
   unverified: number;
@@ -65,11 +71,11 @@ export interface TruffleHogSummary {
   top_detectors: string[];
 }
 
-export interface TruffleHogReport {
+export interface SecretScanReport {
   file: string;
   redacted_hash: string;
-  findings: TruffleHogFinding[];
-  summary: TruffleHogSummary;
+  findings: SecretScanFinding[];
+  summary: SecretScanSummary;
 }
 
 export interface UploadOptions {
@@ -163,7 +169,8 @@ export interface SessionReviewFile {
 
 export const CHARS_PER_REVIEW_TOKEN = 5;
 export const REVIEW_TOKEN_LIMIT = 100_000;
-export const REVIEW_CHUNK_CHAR_LIMIT = CHARS_PER_REVIEW_TOKEN * REVIEW_TOKEN_LIMIT;
+export const REVIEW_CHUNK_CHAR_LIMIT =
+  CHARS_PER_REVIEW_TOKEN * REVIEW_TOKEN_LIMIT;
 export const REVIEW_PROMPT_VERSION = 4;
 export const REDACTION_VERSION = 1;
 export const REMOTE_MANIFEST_FILE = "manifest.jsonl";
@@ -173,4 +180,4 @@ export const REMOTE_MANIFEST_CACHE_FILE = "remote-manifest.jsonl";
 export const REJECT_FILE = "reject.txt";
 export const REVIEW_TOOL_RESULT_MAX_CHARS = 2000;
 export const REVIEW_JSON_VALUE_MAX_CHARS = 4000;
-export const TRUFFLEHOG_REPORT_SUFFIX = ".trufflehog.json";
+export const SECRET_SCAN_REPORT_SUFFIX = ".secrets.json";

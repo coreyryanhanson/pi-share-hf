@@ -7,9 +7,23 @@ import { bold, cyan, dim, green, yellow } from "./colors.ts";
 import { Redactor } from "./redactor.ts";
 import { runReview } from "./review.ts";
 import { computeSecretHash } from "./secrets.ts";
-import { formatTruffleHogFinding, saveTruffleHogReport, scanFilesWithTruffleHog, trufflehogReportPath } from "./trufflehog.ts";
-import type { CollectOptions, InitOptions, JsonObject, ReviewOptions } from "./types.ts";
-import { LOCAL_MANIFEST_FILE, REDACTION_VERSION, REMOTE_MANIFEST_CACHE_FILE } from "./types.ts";
+import {
+  formatSecretScanFinding,
+  saveSecretScanReport,
+  scanFilesWithSecretScan,
+  secretScanReportPath,
+} from "./trufflehog.ts";
+import type {
+  CollectOptions,
+  InitOptions,
+  JsonObject,
+  ReviewOptions,
+} from "./types.ts";
+import {
+  LOCAL_MANIFEST_FILE,
+  REDACTION_VERSION,
+  REMOTE_MANIFEST_CACHE_FILE,
+} from "./types.ts";
 import {
   cwdToSessionDirName,
   downloadRemoteManifest,
@@ -23,7 +37,7 @@ import {
   writeWorkspaceConfig,
 } from "./workspace.ts";
 
-const TRUFFLEHOG_BATCH_SIZE = 50;
+const SECRET_SCAN_BATCH_SIZE = 50;
 
 export async function runInit(options: InitOptions): Promise<void> {
   resetWorkspaceForCollect(options.workspace);
@@ -36,7 +50,9 @@ export async function runInit(options: InitOptions): Promise<void> {
   console.log(`${bold("Initialized workspace:")} ${options.workspace}`);
   console.log(`${bold("CWD:")} ${options.cwd}`);
   console.log(`${bold("Repo:")} ${options.repo}`);
-  console.log(`${bold("Images:")} ${options.noImages ? "stripped" : "preserved"}`);
+  console.log(
+    `${bold("Images:")} ${options.noImages ? "stripped" : "preserved"}`,
+  );
 }
 
 export async function runCollect(options: CollectOptions): Promise<void> {
@@ -45,16 +61,34 @@ export async function runCollect(options: CollectOptions): Promise<void> {
 
   const config = readWorkspaceConfig(options.workspace);
 
-  const remoteManifestCachePath = workspacePath(options.workspace, REMOTE_MANIFEST_CACHE_FILE);
-  const remoteManifest = await downloadRemoteManifest(config.repo, remoteManifestCachePath);
+  const remoteManifestCachePath = workspacePath(
+    options.workspace,
+    REMOTE_MANIFEST_CACHE_FILE,
+  );
+  const remoteManifest = await downloadRemoteManifest(
+    config.repo,
+    remoteManifestCachePath,
+  );
   const sessionDir = findSessionDir(config.cwd);
-  let sessionFiles = fs.readdirSync(sessionDir).filter((file) => file.endsWith(".jsonl")).sort();
+  let sessionFiles = fs
+    .readdirSync(sessionDir)
+    .filter((file) => file.endsWith(".jsonl"))
+    .sort();
   if (options.session) {
-    sessionFiles = sessionFiles.filter((file) => file.includes(options.session!));
+    sessionFiles = sessionFiles.filter((file) =>
+      file.includes(options.session!),
+    );
   }
-  const redactor = new Redactor(options.envFile, options.secrets, !!config.noImages);
+  const redactor = new Redactor(
+    options.envFile,
+    options.secrets,
+    !!config.noImages,
+  );
   const secretsHash = computeSecretHash(options.envFile, options.secrets);
-  const localManifestPath = workspacePath(options.workspace, LOCAL_MANIFEST_FILE);
+  const localManifestPath = workspacePath(
+    options.workspace,
+    LOCAL_MANIFEST_FILE,
+  );
   const localManifest = loadLocalManifest(localManifestPath);
 
   let reusedLocal = 0;
@@ -63,12 +97,17 @@ export async function runCollect(options: CollectOptions): Promise<void> {
   let processedNew = 0;
   let processedChanged = 0;
   let sessionsWithSecretRedactions = 0;
-  let sessionsWithTruffleHogFindings = 0;
-  let sessionsWithVerifiedTruffleHogFindings = 0;
-  let sessionsWithUnverifiedTruffleHogFindings = 0;
-  let sessionsWithUnknownTruffleHogFindings = 0;
-  const processedTruffleHogFindings: Array<{ file: string; findings: string[] }> = [];
-  const trufflehogScanQueue: Array<{ file: string; redactedPath: string; redactedHash: string }> = [];
+  let sessionsWithSecretFindings = 0;
+  let sessionsWithVerifiedSecretFindings = 0;
+  let sessionsWithUnverifiedSecretFindings = 0;
+  let sessionsWithUnknownSecretFindings = 0;
+  const processedSecretFindings: Array<{ file: string; findings: string[] }> =
+    [];
+  const secretScanQueue: Array<{
+    file: string;
+    redactedPath: string;
+    redactedHash: string;
+  }> = [];
 
   console.log(bold("Collect"));
   process.stdout.write(`  ${bold("Sessions found:")} 0`);
@@ -79,20 +118,28 @@ export async function runCollect(options: CollectOptions): Promise<void> {
 
     const inputPath = path.join(sessionDir, file);
     const sourceHash = await sha256File(inputPath);
-    const redactionKey = createRedactionKey(sourceHash, secretsHash, !!config.noImages);
+    const redactionKey = createRedactionKey(
+      sourceHash,
+      secretsHash,
+      !!config.noImages,
+    );
     const remoteEntry = remoteManifest.get(file);
     const localEntry = localManifest.get(file);
     const redactedPath = workspacePath(options.workspace, "redacted", file);
-    const reportPath = workspacePath(options.workspace, "reports", `${file}.report.jsonl`);
-    const trufflehogPath = trufflehogReportPath(options.workspace, file);
+    const reportPath = workspacePath(
+      options.workspace,
+      "reports",
+      `${file}.report.jsonl`,
+    );
+    const secretScanPath = secretScanReportPath(options.workspace, file);
 
     if (
-      !options.force
-      && localEntry
-      && localEntry.redaction_key === redactionKey
-      && fs.existsSync(redactedPath)
-      && fs.existsSync(reportPath)
-      && fs.existsSync(trufflehogPath)
+      !options.force &&
+      localEntry &&
+      localEntry.redaction_key === redactionKey &&
+      fs.existsSync(redactedPath) &&
+      fs.existsSync(reportPath) &&
+      fs.existsSync(secretScanPath)
     ) {
       reusedLocal++;
       continue;
@@ -103,10 +150,21 @@ export async function runCollect(options: CollectOptions): Promise<void> {
       continue;
     }
 
-    fs.rmSync(workspacePath(options.workspace, "review", `${file}.review.json`), { force: true });
-    fs.rmSync(workspacePath(options.workspace, "review-chunks", file), { recursive: true, force: true });
+    fs.rmSync(
+      workspacePath(options.workspace, "review", `${file}.review.json`),
+      { force: true },
+    );
+    fs.rmSync(workspacePath(options.workspace, "review-chunks", file), {
+      recursive: true,
+      force: true,
+    });
 
-    const result = await processSessionFile(inputPath, redactedPath, reportPath, redactor);
+    const result = await processSessionFile(
+      inputPath,
+      redactedPath,
+      reportPath,
+      redactor,
+    );
 
     if (!localEntry && !remoteEntry) processedNew++;
     else processedChanged++;
@@ -114,7 +172,7 @@ export async function runCollect(options: CollectOptions): Promise<void> {
       sessionsWithSecretRedactions++;
     }
 
-    trufflehogScanQueue.push({
+    secretScanQueue.push({
       file,
       redactedPath,
       redactedHash: result.redactedHash,
@@ -133,55 +191,75 @@ export async function runCollect(options: CollectOptions): Promise<void> {
     processed++;
   }
 
-  if (trufflehogScanQueue.length > 0) {
+  if (secretScanQueue.length > 0) {
     console.log();
     console.log();
-    console.log(bold("TruffleHog"));
-    process.stdout.write(`  ${bold("Processed sessions:")} 0/${trufflehogScanQueue.length}`);
+    console.log(bold("Secret scan"));
+    process.stdout.write(
+      `  ${bold("Processed sessions:")} 0/${secretScanQueue.length}`,
+    );
   }
 
-  let trufflehogProcessed = 0;
-  for (let i = 0; i < trufflehogScanQueue.length; i += TRUFFLEHOG_BATCH_SIZE) {
-    const batch = trufflehogScanQueue.slice(i, i + TRUFFLEHOG_BATCH_SIZE);
-    const reports = await scanFilesWithTruffleHog(batch);
+  let secretScanProcessed = 0;
+  for (let i = 0; i < secretScanQueue.length; i += SECRET_SCAN_BATCH_SIZE) {
+    const batch = secretScanQueue.slice(i, i + SECRET_SCAN_BATCH_SIZE);
+    const reports = await scanFilesWithSecretScan(batch);
 
     for (const entry of batch) {
-      const trufflehogReport = reports.get(entry.file);
-      if (!trufflehogReport) {
-        throw new Error(`Missing TruffleHog report for ${entry.file}`);
+      const secretScanReport = reports.get(entry.file);
+      if (!secretScanReport) {
+        throw new Error(`Missing secret scan report for ${entry.file}`);
       }
-      saveTruffleHogReport(trufflehogReportPath(options.workspace, entry.file), trufflehogReport);
+      saveSecretScanReport(
+        secretScanReportPath(options.workspace, entry.file),
+        secretScanReport,
+      );
 
-      if (trufflehogReport.summary.findings > 0) {
-        sessionsWithTruffleHogFindings++;
-        processedTruffleHogFindings.push({
+      if (secretScanReport.summary.findings > 0) {
+        sessionsWithSecretFindings++;
+        processedSecretFindings.push({
           file: entry.file,
-          findings: trufflehogReport.findings.map((finding) => formatTruffleHogFinding(finding)),
+          findings: secretScanReport.findings.map((finding) =>
+            formatSecretScanFinding(finding),
+          ),
         });
       }
-      if (trufflehogReport.summary.verified > 0) {
-        sessionsWithVerifiedTruffleHogFindings++;
+      if (secretScanReport.summary.verified > 0) {
+        sessionsWithVerifiedSecretFindings++;
       }
-      if (trufflehogReport.summary.unverified > 0) {
-        sessionsWithUnverifiedTruffleHogFindings++;
+      if (secretScanReport.summary.unverified > 0) {
+        sessionsWithUnverifiedSecretFindings++;
       }
-      if (trufflehogReport.summary.unknown > 0) {
-        sessionsWithUnknownTruffleHogFindings++;
+      if (secretScanReport.summary.unknown > 0) {
+        sessionsWithUnknownSecretFindings++;
       }
 
-      trufflehogProcessed++;
-      process.stdout.write(`\r  ${bold("Processed sessions:")} ${trufflehogProcessed}/${trufflehogScanQueue.length}`);
+      secretScanProcessed++;
+      process.stdout.write(
+        `\r  ${bold("Processed sessions:")} ${secretScanProcessed}/${secretScanQueue.length}`,
+      );
     }
   }
 
-  if (trufflehogScanQueue.length > 0) {
+  if (secretScanQueue.length > 0) {
     console.log();
   }
 
   const keptEntries = [...localManifest.values()]
-    .filter((entry) => fs.existsSync(workspacePath(options.workspace, "redacted", entry.file))
-      && fs.existsSync(workspacePath(options.workspace, "reports", `${entry.file}.report.jsonl`))
-      && fs.existsSync(trufflehogReportPath(options.workspace, entry.file)))
+    .filter(
+      (entry) =>
+        fs.existsSync(
+          workspacePath(options.workspace, "redacted", entry.file),
+        ) &&
+        fs.existsSync(
+          workspacePath(
+            options.workspace,
+            "reports",
+            `${entry.file}.report.jsonl`,
+          ),
+        ) &&
+        fs.existsSync(secretScanReportPath(options.workspace, entry.file)),
+    )
     .sort((a, b) => a.file.localeCompare(b.file));
   writeJsonlFile(localManifestPath, keptEntries);
 
@@ -191,16 +269,26 @@ export async function runCollect(options: CollectOptions): Promise<void> {
   console.log(`  ${bold("Processed sessions:")} ${green(String(processed))}`);
   console.log(`  ${bold("New sessions:")} ${processedNew}`);
   console.log(`  ${bold("Changed sessions:")} ${processedChanged}`);
-  console.log(`  ${bold("Sessions with secret redactions:")} ${sessionsWithSecretRedactions}`);
-  console.log(`  ${bold("Sessions with any TruffleHog findings:")} ${sessionsWithTruffleHogFindings}`);
-  console.log(`  ${bold("Sessions with verified TruffleHog findings:")} ${sessionsWithVerifiedTruffleHogFindings}`);
-  console.log(`  ${bold("Sessions with unverified TruffleHog findings:")} ${sessionsWithUnverifiedTruffleHogFindings}`);
-  console.log(`  ${bold("Sessions with unknown TruffleHog findings:")} ${sessionsWithUnknownTruffleHogFindings}`);
+  console.log(
+    `  ${bold("Sessions with secret redactions:")} ${sessionsWithSecretRedactions}`,
+  );
+  console.log(
+    `  ${bold("Sessions with any secret findings:")} ${sessionsWithSecretFindings}`,
+  );
+  console.log(
+    `  ${bold("Sessions with verified secret findings:")} ${sessionsWithVerifiedSecretFindings}`,
+  );
+  console.log(
+    `  ${bold("Sessions with unverified secret findings:")} ${sessionsWithUnverifiedSecretFindings}`,
+  );
+  console.log(
+    `  ${bold("Sessions with unknown secret findings:")} ${sessionsWithUnknownSecretFindings}`,
+  );
 
-  if (processedTruffleHogFindings.length > 0) {
+  if (processedSecretFindings.length > 0) {
     console.log();
-    console.log(bold("TruffleHog findings"));
-    for (const entry of processedTruffleHogFindings) {
+    console.log(bold("Secret scan findings"));
+    for (const entry of processedSecretFindings) {
       console.log(`  ${yellow(entry.file)}`);
       for (const finding of entry.findings.slice(0, 10)) {
         console.log(`    ${finding}`);
@@ -224,7 +312,11 @@ export async function runCollect(options: CollectOptions): Promise<void> {
   await runReview(reviewOptions);
 }
 
-function createRedactionKey(sourceHash: string, secretsHash: string, noImages: boolean): string {
+function createRedactionKey(
+  sourceHash: string,
+  secretsHash: string,
+  noImages: boolean,
+): string {
   return `v${REDACTION_VERSION}:${sourceHash}:${secretsHash}:${noImages ? "no-images" : "keep-images"}`;
 }
 
@@ -242,10 +334,18 @@ async function processSessionFile(
   redactedPath: string,
   reportPath: string,
   redactor: Redactor,
-): Promise<{ redactedHash: string; entryCount: number; findings: number; linesWithFindings: number; hasSecretRedactions: boolean }> {
+): Promise<{
+  redactedHash: string;
+  entryCount: number;
+  findings: number;
+  linesWithFindings: number;
+  hasSecretRedactions: boolean;
+}> {
   const input = fs.createReadStream(inputPath, { encoding: "utf-8" });
   const reader = readline.createInterface({ input, crlfDelay: Infinity });
-  const redactedStream = fs.createWriteStream(redactedPath, { encoding: "utf-8" });
+  const redactedStream = fs.createWriteStream(redactedPath, {
+    encoding: "utf-8",
+  });
   const reportStream = fs.createWriteStream(reportPath, { encoding: "utf-8" });
   const redactedHash = createHash("sha256");
 
@@ -340,4 +440,3 @@ function closeStream(stream: fs.WriteStream): Promise<void> {
     });
   });
 }
-

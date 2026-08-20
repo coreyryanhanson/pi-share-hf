@@ -8,5 +8,6 @@
     "rewriteRelativeImportExtensions": true,
     "declaration": false,
     "sourceMap": false
-  }
+  },
+  "exclude": ["node_modules", "pi-sessions", "src/verify-secrets.ts"]
 }
