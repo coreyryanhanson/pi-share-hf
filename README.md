@@ -1,5 +1,9 @@
 # pi-share-hf
 
+> **Fork notice.** This is a fork of [https://github.com/badlogic/pi-share-hf](https://github.com/badlogic/pi-share-hf). The upstream project scans redacted sessions with the [TruffleHog](https://github.com/trufflesecurity/trufflehog) binary, which requires Docker or a native install. This fork replaces that with [secretlint](https://github.com/secretlint/secretlint), a pure-TypeScript secret scanner that runs in-process — no Docker, no binary, no separate install. Everything else is identical to upstream.
+
+> **Opinionated by design.** This fork is opinionated about secret management and deliberately contains no references to closed-weight AI oligopolies. Secret scanning is a backstop, not a guarantee: it only knows the exact secrets you supply plus the generic patterns secretlint ships with. Before publishing anything, revise the list of secrets it checks (`secrets.txt`, `--secret`, `--deny`) to cover your own environment.
+
 Publish [pi](https://pi.dev) coding agent sessions from one OSS project to a Hugging Face dataset.
 
 It is an incremental pipeline for:
@@ -7,7 +11,7 @@ It is an incremental pipeline for:
 1. collecting sessions for one project
 2. redacting exact secrets from your env file and `--secret`
 3. rejecting sessions that match user-provided deny patterns via `--deny`
-4. scanning redacted output with [TruffleHog](https://github.com/trufflesecurity/trufflehog) to detect and verify surviving secrets
+4. scanning redacted output with [secretlint](https://github.com/secretlint/secretlint) to detect surviving secrets
 5. running LLM review on the remaining sessions
 6. uploading only sessions that pass all checks
 
@@ -22,24 +26,16 @@ It keeps state in a workspace, so repeated runs only process what changed (updat
 ## Supported input
 
 - [pi](https://pi.dev) coding agent session files
-- session format: https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/session.md
+- session format: <https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/session.md>
 
 ## Install
 
 ```bash
-npm install -g pi-share-hf
+npm install -g https://github.com/coreyryanhanson/pi-share-hf
 npm install -g @mariozechner/pi-coding-agent
 ```
 
-Install TruffleHog:
-
-```bash
-brew install trufflehog
-```
-
-For Linux and Windows, use the upstream install instructions:
-
-- https://github.com/trufflesecurity/trufflehog
+No separate secret scanner is needed — secretlint runs in-process as part of `pi-share-hf`.
 
 For Hugging Face auth, create a write token and either:
 
@@ -61,7 +57,7 @@ Use one workspace per OSS project. In your OSS project directory:
 
 1. add `.pi/hf-sessions/` to `.gitignore`
 2. run `pi-share-hf init` once
-3. run `pi-share-hf collect` to gather changed and new sessions, redact known secrets, filter by `--deny`, scan with TruffleHog, and run LLM review
+3. run `pi-share-hf collect` to gather changed and new sessions, redact known secrets, filter by `--deny`, scan with secretlint, and run LLM review
 4. inspect what would be uploaded with `pi-share-hf list --uploadable`, `pi-share-hf grep`, and the images folder if images are enabled
 5. reject anything you do not want published
 6. run `pi-share-hf upload`
@@ -96,7 +92,8 @@ Collect sessions:
 pi-share-hf collect \
   --secret secrets.txt \
   --deny deny.txt \
-  --provider openai-codex --model gpt-5.4 --thinking medium \
+  --provider llama.cpp \
+  --thinking medium \
   --parallel 4 \
   README.md AGENTS.md
 ```
@@ -149,31 +146,27 @@ Sources:
 - `--secret <file>` with one secret per line
 - `--secret <literal>`
 
-This is deliberate. Exact values are high precision. Generic token regexes are noisy. TruffleHog handles generic secret detection after redaction.
+This is deliberate. Exact values are high precision. Generic token regexes are noisy. secretlint handles generic secret detection after redaction.
 
-## What TruffleHog does here
+## What secretlint does here
 
-TruffleHog scans the redacted output, not the original raw session.
+secretlint scans the redacted output, not the original raw session.
 
 That means:
 
 - exact secrets should already be gone
-- TruffleHog acts as a backstop for anything secret-like that survived
+- secretlint acts as a backstop for anything secret-like that survived
 
-Any TruffleHog finding blocks the session automatically.
+Any secretlint finding blocks the session automatically.
 
-That includes:
+secretlint is pattern-based and does not attempt live verification, so every finding is reported as `unverified`.
 
-- `verified`
-- `unverified`
-- `unknown`
+So you do not need to manually inspect secretlint hits to decide whether a session is uploadable. The reports are there for debugging, auditing, and understanding why a session was blocked.
 
-So you do not need to manually inspect TruffleHog hits to decide whether a session is uploadable. The reports are there for debugging, auditing, and understanding why a session was blocked.
-
-Per-session TruffleHog reports are stored in:
+Per-session secret scan reports are stored in:
 
 ```text
-.pi/hf-sessions/reports/<session>.trufflehog.json
+.pi/hf-sessions/reports/<session>.secrets.json
 ```
 
 Example:
@@ -184,20 +177,20 @@ Example:
   "redacted_hash": "sha256:...",
   "findings": [
     {
-      "detector": "NpmToken",
-      "status": "verified",
+      "detector": "@secretlint/secretlint-rule-aws",
+      "status": "unverified",
       "line": 132,
       "raw_sha256": "sha256:...",
-      "masked": "npm_tnl0***x4eE",
+      "masked": "s7n0***u2x",
       "verification_from_cache": false
     }
   ],
   "summary": {
     "findings": 1,
-    "verified": 1,
-    "unverified": 0,
+    "verified": 0,
+    "unverified": 1,
     "unknown": 0,
-    "top_detectors": ["NpmToken"]
+    "top_detectors": ["@secretlint/secretlint-rule-aws"]
   }
 }
 ```
@@ -226,13 +219,13 @@ Review files are stored in:
 .pi/hf-sessions/review/<session>.review.json
 ```
 
-Changing provider, model, or thinking level changes the review cache key. The key includes the redacted session hash, context file hashes, provider, model, thinking level, deny-pattern hash, prompt version, and chunk size. If you rerun review with different settings, existing review sidecars for those sessions are replaced.
+Changing provider, model, or thinking level changes the review cache key. The key includes the redacted session hash, context file hashes, provider, model, thinking level, deny-pattern hash, prompt version, and chunk character limit. If you rerun review with different settings, existing review sidecars for those sessions are replaced.
 
 ## What `upload` does
 
-`upload` pushes only sessions that passed deterministic checks, TruffleHog, and LLM review.
+`upload` pushes only sessions that passed deterministic checks, secretlint, and LLM review.
 
-It skips sessions that are manually rejected, missing review data, failed review, or already unchanged on the remote dataset.
+It skips sessions that are manually rejected, missing review data, failed review, missing the local redacted file, or already unchanged on the remote dataset.
 
 Use `upload --dry-run` first if you want counts without pushing anything.
 
@@ -249,7 +242,7 @@ Useful checks:
 - search the uploadable set with `pi-share-hf grep`
 - review `deny.txt` and rerun `collect` if you discover a new never-publish topic
 - inspect `.pi/hf-sessions/images/` when image preservation is enabled
-- inspect `.pi/hf-sessions/reports/*.trufflehog.json` only if you want to debug or audit why a session was blocked by TruffleHog
+- inspect `.pi/hf-sessions/reports/*.secrets.json` only if you want to debug or audit why a session was blocked by secretlint
 - reject anything suspicious manually with `pi-share-hf reject`
 
 Typical grep checks:
@@ -286,7 +279,7 @@ Main options:
 
 ### `collect`
 
-Collects sessions for the configured project, redacts literal secrets, runs TruffleHog on changed redacted files, and runs the LLM review to write or update review sidecars.
+Collects sessions for the configured project, redacts literal secrets, runs secretlint on changed redacted files, and runs the LLM review to write or update review sidecars.
 
 By default it uses:
 
@@ -382,7 +375,7 @@ Uses the built-in TypeScript Hugging Face client. No `huggingface-cli` is needed
   remote-manifest.jsonl
   manifest.jsonl
   redacted/       public candidate files
-  reports/        private deterministic + TruffleHog reports
+  reports/        private deterministic + secret scan reports
   review/         private LLM review sidecars
   review-chunks/  private transcript chunks
   images/         extracted preserved images for uploadable sessions
@@ -400,7 +393,7 @@ Each uploaded `*.jsonl` file is a redacted pi session.
 
 Session format docs:
 
-- https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/session.md
+- <https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/session.md>
 
 ## Development
 
