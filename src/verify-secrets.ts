@@ -15,8 +15,19 @@ import { scanFilesWithSecretScan } from "./trufflehog.ts";
 // `AWS_SECRET_ACCESS_KEY=` env line and a random-looking (non-documented)
 // value, since secretlint skips AWS's official example keys.
 const AWS_SECRET_KEY = "s7n0XBe7bzlOKMBRRz3g3Je3D8QRj81hOism2u2x";
+// Rotated test fixtures (generated then deleted) in the real key charset, for the
+// providers the preset doesn't cover. Kept out of dist via tsconfig.build.json.
+const OPENROUTER_KEY =
+  "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";
+const VENICE_INFERENCE_KEY =
+  "VENICE_INFERENCE_KEY_9yO-hBS9yTPsPxpKZI5wodLA7knSMF4Y9_hi-evSFM";
+const VENICE_ADMIN_KEY =
+  "VENICE_ADMIN_KEY_BDMpTLm4RfgwrmseAsO91wm0DC00O8zHUIr-ziKHlEs";
 const DIRTY_CONTENT = `# credentials
 AWS_SECRET_ACCESS_KEY=${AWS_SECRET_KEY}
+OPENROUTER_API_KEY=${OPENROUTER_KEY}
+VENICE_API_KEY=${VENICE_INFERENCE_KEY}
+VENICE_ADMIN_KEY=${VENICE_ADMIN_KEY}
 `;
 const CLEAN_CONTENT =
   'export const email = "hello@example.com";\nconst t = (a: number, b: number) => a + b;\n';
@@ -41,9 +52,18 @@ async function main() {
     dirty.summary.findings > 0,
     `expected findings for the dirty fixture, got summary=${JSON.stringify(dirty.summary)}`,
   );
+  const dirtyDetectors = dirty.findings.map((f) => f.detector);
   assert.ok(
-    dirty.findings.some((f) => f.detector.toLowerCase().includes("aws")),
-    `expected an AWS detector in findings, got ${dirty.findings.map((f) => f.detector).join(", ")}`,
+    dirtyDetectors.some((d) => d.toLowerCase().includes("aws")),
+    `expected an AWS detector in findings, got ${dirtyDetectors.join(", ")}`,
+  );
+  assert.ok(
+    dirtyDetectors.some((d) => d.toLowerCase().includes("openrouter")),
+    `expected an OpenRouter detector in findings, got ${dirtyDetectors.join(", ")}`,
+  );
+  assert.ok(
+    dirtyDetectors.some((d) => d.toLowerCase().includes("venice")),
+    `expected a Venice detector in findings, got ${dirtyDetectors.join(", ")}`,
   );
 
   const clean = await scanOnce(CLEAN_CONTENT);

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { lintSource } from "@secretlint/core";
 import { creator as presetRecommend } from "@secretlint/secretlint-rule-preset-recommend";
+import type { SecretLintRuleCreator } from "@secretlint/types";
 import type {
   SecretScanFinding,
   SecretScanReport,
@@ -11,12 +12,64 @@ import type {
 import { SECRET_SCAN_REPORT_SUFFIX } from "./types.ts";
 import { isRecord, workspacePath } from "./workspace.ts";
 
+// Custom rules for providers the preset doesn't cover (OpenRouter, Venice AI).
+// `patternRule` builds a minimal scanner rule from a regex; the whole match is
+// reported as the secret (data + range), so extractSecret/maskSecret handle it
+// like any preset rule.
+function patternRule(
+  id: string,
+  label: string,
+  pattern: RegExp,
+): SecretLintRuleCreator {
+  const messages = {
+    KEY: { en: (props: { key: string }) => `${label}: ${props.key}` },
+  };
+  return {
+    messages,
+    meta: {
+      id,
+      type: "scanner",
+      recommended: true,
+      supportedContentTypes: ["text"],
+    },
+    create(context) {
+      const t = context.createTranslator(messages);
+      return {
+        file(source) {
+          for (const match of source.content.matchAll(pattern)) {
+            const index = match.index ?? 0;
+            const value = match[0];
+            context.report({
+              message: t("KEY", { key: value }),
+              range: [index, index + value.length],
+            });
+          }
+        },
+      };
+    },
+  };
+}
+
+const openRouterRule = patternRule(
+  "@secretlint/secretlint-rule-openrouter",
+  "OpenRouter API key",
+  /\bsk-or-v1-[a-fA-F0-9]{64}(?![a-fA-F0-9])/g,
+);
+
+const veniceRule = patternRule(
+  "@secretlint/secretlint-rule-venice",
+  "Venice AI API key",
+  /\bVENICE_(?:INFERENCE|ADMIN)_KEY_[A-Za-z0-9_-]{30,}(?![A-Za-z0-9_-])/g,
+);
+
 const secretlintConfig = {
   rules: [
     {
       id: "@secretlint/secretlint-rule-preset-recommend",
       rule: presetRecommend,
     },
+    { id: "@secretlint/secretlint-rule-openrouter", rule: openRouterRule },
+    { id: "@secretlint/secretlint-rule-venice", rule: veniceRule },
   ],
 };
 
